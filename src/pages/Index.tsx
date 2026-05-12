@@ -2,6 +2,9 @@ import { Plus, Minus, Mail, ExternalLink } from "lucide-react"
 import Icon from "@/components/ui/icon"
 import { Button } from "@/components/ui/button"
 import { useState } from "react"
+import AuthModal from "@/components/AuthModal"
+import { useYandexAuth } from "@/components/extensions/yandex-auth/useYandexAuth"
+import { AUTH_URLS } from "@/lib/auth-config"
 
 // ═══════════════════════════════════════════
 // CMS-CONFIG — все настройки сайта здесь
@@ -75,21 +78,44 @@ const SITE_CONFIG = {
   },
 }
 
-const platformStyles: Record<string, { label: string; bg: string; text: string }> = {
-  litres: { label: "ЛитРес", bg: "#FF6B00", text: "#fff" },
-  ozon: { label: "Ozon", bg: "#005BFF", text: "#fff" },
-  vk: { label: "VK", bg: "#0077FF", text: "#fff" },
-  max: { label: "MAX", bg: "#8B5CF6", text: "#fff" },
+const PLATFORM_LOGOS: Record<string, { img: string; bg: string; label: string }> = {
+  litres: {
+    img: "https://cdn.poehali.dev/projects/35f44f91-149a-4021-80e2-3741183b08ea/bucket/6c4f50a4-01af-459b-8e88-c8561283bad6.png",
+    bg: "#fff",
+    label: "ЛитРес",
+  },
+  ozon: {
+    img: "https://cdn.poehali.dev/projects/35f44f91-149a-4021-80e2-3741183b08ea/bucket/34285dce-98d8-4426-a1f1-bd0691150933.png",
+    bg: "#fff",
+    label: "Ozon",
+  },
+  vk: {
+    img: "https://cdn.poehali.dev/projects/35f44f91-149a-4021-80e2-3741183b08ea/bucket/6653f71d-10a4-42a0-8f11-455051298949.png",
+    bg: "#0077FF",
+    label: "VK",
+  },
+  max: {
+    img: "https://cdn.poehali.dev/projects/35f44f91-149a-4021-80e2-3741183b08ea/bucket/17d9c59f-1012-49ba-a58a-ba10f4a52dae.png",
+    bg: "#fff",
+    label: "MAX",
+  },
 }
 
 const PlatformBadge = ({ platform }: { platform: string }) => {
-  const s = platformStyles[platform] || { label: platform, bg: "#444", text: "#fff" }
+  const p = PLATFORM_LOGOS[platform]
+  if (p) {
+    return (
+      <span
+        className="inline-flex items-center justify-center rounded overflow-hidden flex-shrink-0"
+        style={{ background: p.bg, width: 40, height: 20, padding: "2px 4px" }}
+      >
+        <img src={p.img} alt={p.label} className="h-full w-auto object-contain" />
+      </span>
+    )
+  }
   return (
-    <span
-      className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold"
-      style={{ background: s.bg, color: s.text }}
-    >
-      {s.label}
+    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-white/10 text-white">
+      {platform}
     </span>
   )
 }
@@ -102,6 +128,10 @@ interface FAQ {
 const Index = () => {
   const [openFaq, setOpenFaq] = useState<number | null>(null)
   const [hoveredBook, setHoveredBook] = useState<number | null>(null)
+  const [authModalOpen, setAuthModalOpen] = useState(false)
+  const auth = useYandexAuth({ apiUrls: AUTH_URLS })
+  const userRole = (auth.user as (typeof auth.user & { role?: string }) | null)?.role || "user"
+  const isAdmin = ["admin", "superadmin"].includes(userRole)
 
   const toggleFaq = (index: number) => {
     setOpenFaq(openFaq === index ? null : index)
@@ -170,10 +200,42 @@ const Index = () => {
             ))}
           </div>
 
-          <Button className="bg-red-700 text-white hover:bg-red-600 rounded-full px-6 border-0">
-            Читать книги
-          </Button>
+          <div className="flex items-center gap-3">
+            {auth.isAuthenticated ? (
+              <>
+                {isAdmin && (
+                  <a href="/admin">
+                    <Button className="bg-white/10 text-white hover:bg-white/20 rounded-full px-4 border-0 text-sm gap-2">
+                      <Icon name="LayoutDashboard" size={14} />
+                      Админка
+                    </Button>
+                  </a>
+                )}
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-black/40 ring-1 ring-red-900/40 backdrop-blur rounded-full">
+                  {auth.user?.avatar_url && (
+                    <img src={auth.user.avatar_url} className="w-6 h-6 rounded-full" alt="avatar" />
+                  )}
+                  <span className="text-sm text-white/80">{auth.user?.name?.split(" ")[0] || "Профиль"}</span>
+                  <button onClick={auth.logout} className="text-white/40 hover:text-red-400 text-xs ml-1">✕</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={() => setAuthModalOpen(true)}
+                  className="px-4 py-2 bg-black/40 ring-1 ring-red-900/30 backdrop-blur rounded-full hover:bg-red-900/20 transition-all text-sm"
+                >
+                  Войти
+                </button>
+                <Button className="bg-red-700 text-white hover:bg-red-600 rounded-full px-6 border-0">
+                  Читать книги
+                </Button>
+              </>
+            )}
+          </div>
         </nav>
+
+        <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
 
         <div className="relative z-10 flex flex-col items-center justify-center min-h-[calc(100vh-120px)] px-6 text-center">
           <div className="mb-6 px-4 py-2 bg-black/50 ring-1 ring-red-900/50 backdrop-blur rounded-full">
@@ -359,8 +421,18 @@ const Index = () => {
                   rel="noopener noreferrer"
                   className="group flex items-center gap-5 rounded-2xl bg-black/30 ring-1 ring-red-900/30 backdrop-blur p-6 hover:ring-red-700/60 hover:bg-red-900/10 transition-all"
                 >
-                  <div className="flex-shrink-0 w-14 h-14 rounded-xl flex items-center justify-center bg-black/40 ring-1 ring-red-900/30">
-                    <PlatformBadge platform={ch.platform} />
+                  <div className="flex-shrink-0 w-14 h-14 rounded-xl flex items-center justify-center overflow-hidden"
+                    style={{ background: PLATFORM_LOGOS[ch.platform]?.bg || "#1a1a2e" }}
+                  >
+                    {PLATFORM_LOGOS[ch.platform] ? (
+                      <img
+                        src={PLATFORM_LOGOS[ch.platform].img}
+                        alt={ch.name}
+                        className="w-10 h-10 object-contain"
+                      />
+                    ) : (
+                      <span className="text-white font-bold text-xs">{ch.name[0]}</span>
+                    )}
                   </div>
                   <div className="flex-1 min-w-0">
                     <h3 className="text-lg font-semibold group-hover:text-red-400 transition-colors mb-1">{ch.name}</h3>
