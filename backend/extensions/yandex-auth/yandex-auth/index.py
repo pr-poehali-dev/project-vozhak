@@ -471,6 +471,146 @@ def handle_logout(event: dict, origin: str) -> dict:
 
 
 # =============================================================================
+# EMAIL AUTH HANDLERS
+# =============================================================================
+
+def handle_email_login(event: dict, origin: str) -> dict:
+    """Login with email and password."""
+    import base64 as b64mod
+    body_str = event.get('body', '{}')
+    if event.get('isBase64Encoded'):
+        body_str = b64mod.b64decode(body_str).decode('utf-8')
+    try:
+        payload = json.loads(body_str) if body_str else {}
+    except json.JSONDecodeError:
+        return error(400, 'Invalid JSON', origin)
+
+    email = (payload.get('email') or '').strip().lower()
+    password = payload.get('password') or ''
+    if not email or not password:
+        return error(400, 'Email and password are required', origin)
+
+    try:
+        get_jwt_secret()
+    except ValueError:
+        return error(500, 'Server configuration error', origin)
+
+    S = get_schema()
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT id, email, name, avatar_url, password_hash FROM {S}users WHERE email = %s",
+            (email,)
+        )
+        row = cur.fetchone()
+        if not row:
+            return error(401, 'Неверный email или пароль', origin)
+
+        user_id, db_email, name, avatar_url, password_hash = row
+        import hashlib as hl
+        if hl.sha256(password.encode()).hexdigest() != password_hash:
+            return error(401, 'Неверный email или пароль', origin)
+
+        # Update last login
+        cur.execute(
+            f"UPDATE {S}users SET last_login_at = %s, updated_at = %s WHERE id = %s",
+            (datetime.now(timezone.utc).isoformat(), datetime.now(timezone.utc).isoformat(), user_id)
+        )
+
+        access_token, expires_in = create_access_token(user_id, db_email)
+        refresh_token = create_refresh_token()
+        refresh_token_hash = hash_token(refresh_token)
+        refresh_expires = (datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)).isoformat()
+
+        cleanup_expired_tokens(cur, S)
+        cur.execute(
+            f"INSERT INTO {S}refresh_tokens (user_id, token_hash, expires_at) VALUES (%s, %s, %s)",
+            (user_id, refresh_token_hash, refresh_expires)
+        )
+        conn.commit()
+
+        return response(200, {
+            'access_token': access_token,
+            'refresh_token': refresh_token,
+            'expires_in': expires_in,
+            'user': {'id': user_id, 'email': db_email, 'name': name, 'avatar_url': avatar_url, 'yandex_id': None}
+        }, origin)
+    except Exception:
+        conn.rollback()
+        return error(500, 'Database error', origin)
+    finally:
+        conn.close()
+
+
+def handle_email_register(event: dict, origin: str) -> dict:
+    """Register with email and password."""
+    import base64 as b64mod
+    body_str = event.get('body', '{}')
+    if event.get('isBase64Encoded'):
+        body_str = b64mod.b64decode(body_str).decode('utf-8')
+    try:
+        payload = json.loads(body_str) if body_str else {}
+    except json.JSONDecodeError:
+        return error(400, 'Invalid JSON', origin)
+
+    email = (payload.get('email') or '').strip().lower()
+    password = payload.get('password') or ''
+    name = (payload.get('name') or '').strip()
+    if not email or not password:
+        return error(400, 'Email and password are required', origin)
+    if len(password) < 8:
+        return error(400, 'Пароль должен быть не менее 8 символов', origin)
+
+    try:
+        get_jwt_secret()
+    except ValueError:
+        return error(500, 'Server configuration error', origin)
+
+    import hashlib as hl
+    password_hash = hl.sha256(password.encode()).hexdigest()
+
+    S = get_schema()
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"SELECT id FROM {S}users WHERE email = %s", (email,))
+        if cur.fetchone():
+            return error(409, 'Пользователь с таким email уже существует', origin)
+
+        cur.execute(
+            f"""INSERT INTO {S}users (email, name, password_hash, role, email_verified, created_at, updated_at)
+                VALUES (%s, %s, %s, 'user', TRUE, %s, %s) RETURNING id""",
+            (email, name or email.split('@')[0], password_hash,
+             datetime.now(timezone.utc).isoformat(), datetime.now(timezone.utc).isoformat())
+        )
+        user_id = cur.fetchone()[0]
+
+        access_token, expires_in = create_access_token(user_id, email)
+        refresh_token = create_refresh_token()
+        refresh_token_hash = hash_token(refresh_token)
+        refresh_expires = (datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)).isoformat()
+
+        cur.execute(
+            f"INSERT INTO {S}refresh_tokens (user_id, token_hash, expires_at) VALUES (%s, %s, %s)",
+            (user_id, refresh_token_hash, refresh_expires)
+        )
+        conn.commit()
+
+        return response(201, {
+            'access_token': access_token,
+            'refresh_token': refresh_token,
+            'expires_in': expires_in,
+            'user': {'id': user_id, 'email': email, 'name': name, 'avatar_url': None, 'yandex_id': None}
+        }, origin)
+    except Exception:
+        conn.rollback()
+        return error(500, 'Database error', origin)
+    finally:
+        conn.close()
+
+
+# =============================================================================
 # MAIN HANDLER
 # =============================================================================
 
@@ -491,6 +631,8 @@ def handler(event: dict, context) -> dict:
         'callback': handle_callback,
         'refresh': handle_refresh,
         'logout': handle_logout,
+        'email-login': handle_email_login,
+        'email-register': handle_email_register,
     }
 
     if action not in handlers:
